@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>클래식 테트리스 프로 (Classic Tetris Pro)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            background-color: #0b0b0f;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+            transition: background-color 0.5s ease;
+        }
+        canvas {
+            image-rendering: pixelated;
+            outline: none; /* 포커스 시 테두리 제거 */
+            transition: border-color 0.5s ease;
+        }
+    </style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen text-slate-100 font-sans p-2">
+
+    <!-- 메인 대시보드 구조 -->
+    <div id="mainContainer" class="flex flex-col items-center w-full max-w-lg bg-[#161622] p-4 md:p-6 rounded-2xl border border-slate-800 shadow-2xl transition-all duration-500">
+        
+        <!-- 상단 타이틀 바 -->
+        <div class="text-center mb-4">
+            <h1 id="mainTitle" class="text-2xl md:text-3xl font-black tracking-widest text-emerald-400">TETRIS CLASSIC</h1>
+            <p id="subTitle" class="text-xs text-slate-400 mt-1 font-bold">Standard 7-Bag Mode • Adaptive Theme active</p>
+        </div>
+
+        <!-- 포커스 상태 알림 패널 -->
+        <div id="focusBanner" class="w-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs py-2 px-3 rounded-lg text-center mb-3 transition-opacity duration-300">
+            ⚠️ <span class="font-bold">키보드 조종이 안 된다면?</span> 화면을 마우스로 한번 클릭해 주세요!
+        </div>
+
+        <!-- 게임 영역 (메인 그리드 + 사이드 패널) -->
+        <div id="gameWrapper" class="relative flex flex-row bg-[#0f0f16] rounded-xl overflow-hidden border-2 border-slate-700 shadow-inner transition-colors duration-500">
+            <!-- tabindex를 부여하여 캔버스 자체에 포커싱이 가능하도록 설계 -->
+            <canvas id="gameCanvas" width="480" height="600" tabindex="0" class="block max-w-full h-auto cursor-pointer"></canvas>
+        </div>
+
+        <!-- 모바일 가상 조작 패드 -->
+        <div class="w-full mt-4 grid grid-cols-5 gap-2 max-w-sm">
+            <button id="btnLeft" class="bg-slate-800 hover:bg-slate-700 active:bg-emerald-500 text-white font-bold p-3 rounded-lg text-lg flex items-center justify-center transition-colors">◀</button>
+            <button id="btnRotate" class="bg-slate-800 hover:bg-slate-700 active:bg-emerald-500 text-white font-bold p-3 rounded-lg text-lg flex items-center justify-center transition-colors">▲</button>
+            <button id="btnRight" class="bg-slate-800 hover:bg-slate-700 active:bg-emerald-500 text-white font-bold p-3 rounded-lg text-lg flex items-center justify-center transition-colors">▶</button>
+            <button id="btnDown" class="bg-slate-800 hover:bg-slate-700 active:bg-emerald-500 text-white font-bold p-3 rounded-lg text-lg flex items-center justify-center transition-colors">▼</button>
+            <button id="btnHard" class="bg-blue-900 hover:bg-blue-800 active:bg-emerald-500 text-white font-bold p-3 rounded-lg text-sm flex items-center justify-center transition-colors">SPACE</button>
+        </div>
+
+        <!-- 데스크톱 전용 조작 가이드 -->
+        <div id="keyboardGuide" class="hidden md:block w-full mt-4 text-center text-xs text-slate-400 border-t border-slate-800 pt-3 space-y-1 transition-colors duration-500">
+            <p>⌨️ <span class="text-emerald-400 font-bold">방향키 좌/우</span>: 이동 | <span class="text-emerald-400 font-bold">상(▲)</span>: 회전 | <span class="text-emerald-400 font-bold">하(▼)</span>: 소프트 드롭</p>
+            <p><span class="text-emerald-400 font-bold">스페이스바</span>: 하드 드롭 | <span class="text-amber-400 font-bold">ESC</span>: 일시정지 | <span class="text-red-400 font-bold">R 키</span>: 게임오버 시 재시작</p>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const focusBanner = document.getElementById('focusBanner');
+        const mainContainer = document.getElementById('mainContainer');
+        const mainTitle = document.getElementById('mainTitle');
+        const subTitle = document.getElementById('subTitle');
+        const gameWrapper = document.getElementById('gameWrapper');
+        const keyboardGuide = document.getElementById('keyboardGuide');
+
+        // --- 1. 테트리스 규격 설정 ---
+        const GRID_CELL_SIZE = 30; // 30px
+        const GRID_COLS = 10;
+        const GRID_ROWS = 20;
+        const SIDE_PANEL_WIDTH = 180;
+
+        // 동적 조정을 위해 테마 전용 색상 셋 변수화 (Black 테마 디폴트 시작)
+        let color_bg = "#0f0f16";
+        let color_side_bg = "#1c1c28";
+        let color_grid_line = "#232332";
+        let color_border = "#46465f";
+        let color_text_val = "#00e676";
+        let color_text_lbl = "#aaaab4";
+        let currentTheme = "dark"; // dark 또는 light
+
+        const TETROMINO_COLORS = {
+            'I': "#00e5ff",
+            'O': "#ffd700",
+            'T': "#aa00ff",
+            'S': "#00e676",
+            'Z': "#ff1744",
+            'J': "#2979ff",
+            'L': "#ff6d00"
+        };
+
+        const SHAPES = {
+            'I': [
+                [[0, 1], [1, 1], [2, 1], [3, 1]],
+                [[2, 0], [2, 1], [2, 2], [2, 3]],
+                [[0, 2], [1, 2], [2, 2], [3, 2]],
+                [[1, 0], [1, 1], [1, 2], [1, 3]]
+            ],
+            'O': [
+                [[1, 0], [2, 0], [1, 1], [2, 1]]
+            ],
+            'T': [
+                [[1, 0], [0, 1], [1, 1], [2, 1]],
+                [[1, 0], [1, 1], [2, 1], [1, 2]],
+                [[0, 1], [1, 1], [2, 1], [1, 2]],
+                [[1, 0], [0, 1], [1, 1], [1, 2]]
+            ],
+            'S': [
+                [[1, 0], [2, 0], [0, 1], [1, 1]],
+                [[1, 0], [1, 1], [2, 1], [2, 2]],
+                [[1, 1], [2, 1], [0, 2], [1, 2]],
+                [[0, 0], [0, 1], [1, 1], [1, 2]]
+            ],
+            'Z': [
+                [[0, 0], [1, 0], [1, 1], [2, 1]],
+                [[2, 0], [1, 1], [2, 1], [1, 2]],
+                [[0, 1], [1, 1], [1, 2], [2, 2]],
+                [[1, 0], [0, 1], [1, 1], [0, 2]]
+            ],
+            'J': [
+                [[0, 0], [0, 1], [1, 1], [2, 1]],
+                [[1, 0], [2, 0], [1, 1], [1, 2]],
+                [[0, 1], [1, 1], [2, 1], [2, 2]],
+                [[1, 0], [1, 1], [0, 2], [1, 2]]
+            ],
+            'L': [
+                [[2, 0], [0, 1], [1, 1], [2, 1]],
+                [[1, 0], [1, 1], [1, 2], [2, 2]],
+                [[0, 1], [1, 1], [2, 1], [0, 2]],
+                [[0, 0], [1, 0], [1, 1], [1, 2]]
+            ]
+        };
+
+        // --- 호환성 방어벽: roundRect 미지원 구형 브라우저 대응 함수 ---
+        function safeDrawRect(x, y, width, height, radius, fillStyle, strokeStyle = null, strokeWidth = 1) {
+            ctx.fillStyle = fillStyle;
+            ctx.beginPath();
+            if (typeof ctx.roundRect === 'function') {
+                ctx.roundRect(x, y, width, height, radius);
+            } else {
+                ctx.rect(x, y, width, height);
+            }
+            ctx.fill();
+            if (strokeStyle) {
+                ctx.strokeStyle = strokeStyle;
+                ctx.lineWidth = strokeWidth;
+                ctx.stroke();
+            }
+        }
+
+        // --- 2. 게임 상태 객체 ---
+        class Tetromino {
+            constructor(name) {
+                this.name = name;
+                this.rotations = SHAPES[name];
+                this.rotationIndex = 0;
+                this.color = TETROMINO_COLORS[name];
+                this.x = Math.floor((GRID_COLS - 4) / 2);
+                this.y = -1;
+            }
+
+            get currentBlocks() {
+                return this.rotations[this.rotationIndex];
+            }
+
+            rotate() {
+                this.rotationIndex = (this.rotationIndex + 1) % this.rotations.length;
+            }
+
+            reverseRotate() {
+                this.rotationIndex = (this.rotationIndex - 1 + this.rotations.length) % this.rotations.length;
+            }
+        }
+
+        class TetrisGame {
+            constructor() {
+                this.grid = Array.from({ length: GRID_ROWS }, () => Array(GRID_COLS).fill(null));
+                this.bag = [];
+                this.currentPiece = this.getNewPiece();
+                this.nextPiece = this.getNewPiece();
+                this.score = 0;
+                this.linesCleared = 0;
+                this.level = 1;
+                this.gameOver = false;
+                this.paused = false; 
+                this.fallSpeedMs = 800;
+                this.lastFallTime = performance.now();
+                
+                // 천장 위기 경보용 변수 추가 (그리드 최상단과 블록의 최상단 거리 기록)
+                this.topBlockY = GRID_ROWS; 
+            }
+
+            // [클래식 7-Bag 알고리즘으로 정상 복구 및 롤백 완료]
+            getNewPiece() {
+                if (this.bag.length === 0) {
+                    this.bag = Object.keys(SHAPES);
+                    // 무작위 균등 분배 셔플링
+                    for (let i = this.bag.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
+                    }
+                }
+                const chosenName = this.bag.pop();
+                return new Tetromino(chosenName);
+            }
+
+            checkValidPosition(piece, offsetX = 0, offsetY = 0, customBlocks = null) {
+                const blocks = customBlocks || piece.currentBlocks;
+                for (const [bx, by] of blocks) {
+                    const targetX = piece.x + bx + offsetX;
+                    const targetY = piece.y + by + offsetY;
+
+                    if (targetX < 0 || targetX >= GRID_COLS) return false;
+                    if (targetY >= GRID_ROWS) return false;
+                    if (targetY >= 0) {
+                        if (this.grid[targetY][targetX] !== null) return false;
+                    }
+                }
+                return true;
+            }
+
+            // 예측 블록(Ghost Piece)이 들어갈 깊이(Y좌표 차이) 계산
+            getGhostY() {
+                let dropDist = 0;
+                while (this.checkValidPosition(this.currentPiece, 0, dropDist + 1)) {
+                    dropDist++;
+                }
+                return this.currentPiece.y + dropDist;
+            }
+
+            attemptRotation() {
+                if (this.paused) return false;
+                this.currentPiece.rotate();
+                if (this.checkValidPosition(this.currentPiece)) return true;
+
+                const kicks = [[-1, 0], [1, 0], [0, -1], [-2, 0], [2, 0]];
+                for (const [kx, ky] of kicks) {
+                    if (this.checkValidPosition(this.currentPiece, kx, ky)) {
+                        this.currentPiece.x += kx;
+                        this.currentPiece.y += ky;
+                        return true;
+                    }
+                }
+
+                this.currentPiece.reverseRotate();
+                return false;
+            }
+
+            lockPiece() {
+                for (const [bx, by] of this.currentPiece.currentBlocks) {
+                    const gx = this.currentPiece.x + bx;
+                    const gy = this.currentPiece.y + by;
+
+                    if (gy >= 0) {
+                        this.grid[gy][gx] = this.currentPiece.color;
+                    } else {
+                        this.gameOver = true;
+                    }
+                }
+
+                if (!this.gameOver) {
+                    this.clearLines();
+                    this.currentPiece = this.nextPiece;
+                    this.nextPiece = this.getNewPiece();
+
+                    if (!this.checkValidPosition(this.currentPiece)) {
+                        this.gameOver = true;
+                    }
+                }
+                this.calculateTopBlockY(); // 고정될 때마다 위기 감지 상태 업데이트
+            }
+
+            clearLines() {
+                let linesToClear = [];
+                for (let r = 0; r < GRID_ROWS; r++) {
+                    if (this.grid[r].every(cell => cell !== null)) {
+                        linesToClear.push(r);
+                    }
+                }
+
+                const numCleared = linesToClear.length;
+                if (numCleared === 0) return;
+
+                linesToClear.forEach(row => {
+                    this.grid.splice(row, 1);
+                    this.grid.unshift(Array(GRID_COLS).fill(null));
+                });
+
+                const scoreTable = { 1: 100, 2: 300, 3: 500, 4: 800 };
+                this.score += (scoreTable[numCleared] || 0) * this.level;
+                this.linesCleared += numCleared;
+
+                const newLevel = Math.floor(this.linesCleared / 10) + 1;
+                if (newLevel !== this.level) {
+                    this.level = newLevel;
+                    this.fallSpeedMs = Math.max(100, 800 - (this.level - 1) * 80);
+                }
+
+                // 점수가 변동됨에 따라 실시간 테마 상태 트리거링
+                updateTheme(this.score);
+            }
+
+            hardDrop() {
+                if (this.paused) return;
+                let dropDist = 0;
+                while (this.checkValidPosition(this.currentPiece, 0, dropDist + 1)) {
+                    dropDist++;
+                }
+                this.currentPiece.y += dropDist;
+                this.lockPiece();
+            }
+
+            updateGravity() {
+                if (this.paused) return;
+                if (this.checkValidPosition(this.currentPiece, 0, 1)) {
+                    this.currentPiece.y++;
+                } else {
+                    this.lockPiece();
+                }
+                this.lastFallTime = performance.now();
+            }
+
+            togglePause() {
+                if (this.gameOver) return;
+                this.paused = !this.paused;
+                if (!this.paused) {
+                    this.lastFallTime = performance.now(); 
+                }
+            }
+
+            // 고정된 블록 중 최상단 블록의 Y 좌표를 찾아 위기 경보 트리거링 기준 수립
+            calculateTopBlockY() {
+                for (let r = 0; r < GRID_ROWS; r++) {
+                    for (let c = 0; c < GRID_COLS; c++) {
+                        if (this.grid[r][c] !== null) {
+                            this.topBlockY = r;
+                            return;
+                        }
+                    }
+                }
+                this.topBlockY = GRID_ROWS; // 아무것도 쌓여있지 않은 상태
+            }
+        }
+
+        // --- 테마 동적 업데이트 함수 ---
+        function updateTheme(score) {
+            // 점수를 1000으로 나눈 몫이 홀수면 하얀색 테마(light), 짝수면 검은색 테마(dark)로 순환
+            const segment = Math.floor(score / 1000);
+            const targetTheme = (segment % 2 === 1) ? "light" : "dark";
+
+            if (currentTheme !== targetTheme) {
+                currentTheme = targetTheme;
+                
+                if (currentTheme === "light") {
+                    // 화이트 테마 세팅
+                    color_bg = "#f3f4f6";        // 연한 회색 배경
+                    color_side_bg = "#e5e7eb";   // 조금 더 깊은 회색 패널
+                    color_grid_line = "#d1d5db"; // 밝은 격자 구별선
+                    color_border = "#9ca3af";    // 경계선
+                    color_text_val = "#059669";  // 진한 에메랄드 그린 값
+                    color_text_lbl = "#4b5563";  // 정돈된 그레이 라벨
+
+                    // UI 컨테이너 및 도구 요소 돔 연동 스타일 제어
+                    document.body.style.backgroundColor = "#e5e7eb";
+                    mainContainer.classList.remove("bg-[#161622]", "border-slate-800", "text-slate-100");
+                    mainContainer.classList.add("bg-white", "border-slate-300", "text-slate-800");
+                    mainTitle.className = "text-2xl md:text-3xl font-black tracking-widest text-emerald-600";
+                    subTitle.className = "text-xs text-slate-500 mt-1 font-bold";
+                    gameWrapper.className = "relative flex flex-row bg-white rounded-xl overflow-hidden border-2 border-slate-300 shadow-inner";
+                    keyboardGuide.className = "hidden md:block w-full mt-4 text-center text-xs text-slate-600 border-t border-slate-200 pt-3 space-y-1";
+                } else {
+                    // 블랙 테마 세팅
+                    color_bg = "#0f0f16";
+                    color_side_bg = "#1c1c28";
+                    color_grid_line = "#232332";
+                    color_border = "#46465f";
+                    color_text_val = "#00e676";
+                    color_text_lbl = "#aaaab4";
+
+                    // UI 컨테이너 및 도구 요소 돔 연동 스타일 복귀
+                    document.body.style.backgroundColor = "#0b0b0f";
+                    mainContainer.classList.remove("bg-white", "border-slate-300", "text-slate-800");
+                    mainContainer.classList.add("bg-[#161622]", "border-slate-800", "text-slate-100");
+                    mainTitle.className = "text-2xl md:text-3xl font-black tracking-widest text-emerald-400";
+                    subTitle.className = "text-xs text-amber-400 mt-1 font-bold";
+                    gameWrapper.className = "relative flex flex-row bg-[#0f0f16] rounded-xl overflow-hidden border-2 border-slate-700 shadow-inner";
+                    keyboardGuide.className = "hidden md:block w-full mt-4 text-center text-xs text-slate-400 border-t border-slate-800 pt-3 space-y-1";
+                }
+            }
+        }
+
+        // --- 3. 컨트롤 등록 및 바인딩 ---
+        let game = new TetrisGame();
+        const keys = { ArrowLeft: false, ArrowRight: false, ArrowDown: false };
+        
+        let keyDelayTimer = 0;
+        const DAS_DELAY = 180;    
+        const ARR_INTERVAL = 60;  
+        let isFirstMove = true;   
+
+        // 포커스 안내 관리
+        canvas.addEventListener('focus', () => {
+            focusBanner.classList.add('opacity-0');
+            setTimeout(() => focusBanner.classList.add('hidden'), 300);
+        });
+
+        canvas.addEventListener('blur', () => {
+            focusBanner.classList.remove('hidden');
+            setTimeout(() => focusBanner.classList.remove('opacity-0'), 10);
+            if (!game.gameOver && !game.paused) {
+                game.paused = true; 
+            }
+        });
+
+        // 키보드 이벤트 리스너를 캔버스 자체에 붙여 포커스 상태일 때만 안전하게 동작하도록 구현
+        canvas.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                game.togglePause();
+                e.preventDefault();
+                return;
+            }
+
+            if (game.gameOver) {
+                if (e.key === 'r' || e.key === 'R') {
+                    game = new TetrisGame();
+                    updateTheme(game.score); // 초기 테마로 복구 트리거
+                }
+                return;
+            }
+
+            if (game.paused) {
+                return;
+            }
+
+            if (e.key === 'ArrowLeft' && !keys.ArrowLeft) {
+                if (game.checkValidPosition(game.currentPiece, -1, 0)) {
+                    game.currentPiece.x--;
+                }
+                keys.ArrowLeft = true;
+                keyDelayTimer = 0;
+                isFirstMove = true;
+                e.preventDefault();
+            }
+            if (e.key === 'ArrowRight' && !keys.ArrowRight) {
+                if (game.checkValidPosition(game.currentPiece, 1, 0)) {
+                    game.currentPiece.x++;
+                }
+                keys.ArrowRight = true;
+                keyDelayTimer = 0;
+                isFirstMove = true;
+                e.preventDefault();
+            }
+            if (e.key === 'ArrowDown') {
+                keys.ArrowDown = true;
+                e.preventDefault();
+            }
+            if (e.key === 'ArrowUp') {
+                game.attemptRotation();
+                e.preventDefault();
+            }
+            if (e.key === ' ') {
+                game.hardDrop();
+                e.preventDefault();
+            }
+        });
+
+        canvas.addEventListener('keyup', (e) => {
+            if (e.key === 'ArrowLeft') keys.ArrowLeft = false;
+            if (e.key === 'ArrowRight') keys.ArrowRight = false;
+            if (e.key === 'ArrowDown') keys.ArrowDown = false;
+        });
+
+        // 모바일 가상 패드 바인딩 (자동으로 포커싱을 먼저 잡도록 보완)
+        document.getElementById('btnLeft').addEventListener('click', () => {
+            canvas.focus();
+            if (game.paused || game.gameOver) return;
+            if (game.checkValidPosition(game.currentPiece, -1, 0)) {
+                game.currentPiece.x--;
+            }
+        });
+        document.getElementById('btnRight').addEventListener('click', () => {
+            canvas.focus();
+            if (game.paused || game.gameOver) return;
+            if (game.checkValidPosition(game.currentPiece, 1, 0)) {
+                game.currentPiece.x++;
+            }
+        });
+        document.getElementById('btnRotate').addEventListener('click', () => {
+            canvas.focus();
+            if (game.paused || game.gameOver) return;
+            game.attemptRotation();
+        });
+        document.getElementById('btnDown').addEventListener('click', () => {
+            canvas.focus();
+            if (game.paused || game.gameOver) return;
+            if (game.checkValidPosition(game.currentPiece, 0, 1)) {
+                game.currentPiece.y++;
+            }
+        });
+        document.getElementById('btnHard').addEventListener('click', () => {
+            canvas.focus();
+            if (game.paused || game.gameOver) return;
+            game.hardDrop();
+        });
+
+        // --- 4. 그래픽 드로잉 파이프라인 ---
+        function drawGridBackground() {
+            ctx.fillStyle = color_bg;
+            ctx.fillRect(0, 0, GRID_COLS * GRID_CELL_SIZE, canvas.height);
+
+            // 동적 테마 격자선 적용
+            ctx.strokeStyle = color_grid_line;
+            ctx.lineWidth = 0.5;
+
+            for (let c = 0; c <= GRID_COLS; c++) {
+                ctx.beginPath();
+                ctx.moveTo(c * GRID_CELL_SIZE, 0);
+                ctx.lineTo(c * GRID_CELL_SIZE, canvas.height);
+                ctx.stroke();
+            }
+            for (let r = 0; r <= GRID_ROWS; r++) {
+                ctx.beginPath();
+                ctx.moveTo(0, r * GRID_CELL_SIZE);
+                ctx.lineTo(GRID_COLS * GRID_CELL_SIZE, r * GRID_CELL_SIZE);
+                ctx.stroke();
+            }
+        }
+
+        // 위기 감지 및 천장 그라데이션 경보 페이딩 처리 함수
+        function drawWarningDangerOverlay(now) {
+            // 천장과 최고 블록간의 유효 여유칸 산출 (3칸 이하 즉, 최상단 Y좌표 2번 라인 이하로 진입 시 작동)
+            const margin = game.topBlockY;
+            if (margin <= 2) {
+                // 부드러운 삼각함수 사이클 파동 생성 (페이드 인/아웃 주기 1초 구현)
+                const pulse = (Math.sin(now / 150) + 1) / 2; // 0 ~ 1 사이 범위 변동값
+                
+                ctx.save();
+                // 위기 수준에 따라 투명도 비중 가중 (Y좌표가 0에 가까울 수록 더 붉게 강화)
+                const maxAlpha = margin === 0 ? 0.7 : margin === 1 ? 0.5 : 0.35;
+                ctx.globalAlpha = pulse * maxAlpha;
+
+                // 천장 상단부터 수직 하단 방향으로 붉은빛 그라데이션 맵핑 생성
+                const gradient = ctx.createLinearGradient(0, 0, 0, GRID_ROWS * GRID_CELL_SIZE);
+                gradient.addColorStop(0, "rgba(255, 0, 0, 0.85)"); // 천장부는 강렬한 레드
+                gradient.addColorStop(0.3, "rgba(255, 0, 0, 0.35)");
+                gradient.addColorStop(1, "rgba(0, 0, 0, 0)");       // 바닥은 완전히 페이드아웃
+
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, GRID_COLS * GRID_CELL_SIZE, GRID_ROWS * GRID_CELL_SIZE);
+                ctx.restore();
+            }
+        }
+
+        function drawLockedBlocks() {
+            for (let r = 0; r < GRID_ROWS; r++) {
+                for (let c = 0; c < GRID_COLS; c++) {
+                    const color = game.grid[r][c];
+                    if (color) {
+                        safeDrawRect(c * GRID_CELL_SIZE + 1, r * GRID_CELL_SIZE + 1, GRID_CELL_SIZE - 2, GRID_CELL_SIZE - 2, 3, color);
+                    }
+                }
+            }
+        }
+
+        // 반투명 예측 블록(Ghost Piece) 그리기
+        function drawGhostPiece() {
+            const piece = game.currentPiece;
+            const ghostY = game.getGhostY();
+
+            ctx.save();
+            ctx.globalAlpha = 0.25; 
+            for (const [bx, by] of piece.currentBlocks) {
+                const gy = ghostY + by;
+                if (gy >= 0) {
+                    safeDrawRect(
+                        (piece.x + bx) * GRID_CELL_SIZE + 1, 
+                        gy * GRID_CELL_SIZE + 1, 
+                        GRID_CELL_SIZE - 2, 
+                        GRID_CELL_SIZE - 2, 
+                        3, 
+                        piece.color,
+                        piece.color, 
+                        1
+                    );
+                }
+            }
+            ctx.restore();
+        }
+
+        function drawCurrentPiece() {
+            const piece = game.currentPiece;
+            for (const [bx, by] of piece.currentBlocks) {
+                const gy = piece.y + by;
+                if (gy >= 0) {
+                    safeDrawRect((piece.x + bx) * GRID_CELL_SIZE + 1, gy * GRID_CELL_SIZE + 1, GRID_CELL_SIZE - 2, GRID_CELL_SIZE - 2, 3, piece.color);
+                }
+            }
+        }
+
+        function drawSidePanel() {
+            const panelX = GRID_COLS * GRID_CELL_SIZE;
+
+            ctx.fillStyle = color_side_bg;
+            ctx.fillRect(panelX, 0, SIDE_PANEL_WIDTH, canvas.height);
+
+            ctx.strokeStyle = color_border;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(panelX, 0);
+            ctx.lineTo(panelX, canvas.height);
+            ctx.stroke();
+
+            // LEVEL 표시
+            ctx.fillStyle = color_text_lbl;
+            ctx.font = "bold 13px Helvetica";
+            ctx.fillText("LEVEL", panelX + 20, 50);
+            ctx.fillStyle = color_text_val;
+            ctx.font = "bold 26px Helvetica";
+            ctx.fillText(game.level.toString(), panelX + 20, 80);
+
+            // SCORE 표시
+            ctx.fillStyle = color_text_lbl;
+            ctx.font = "bold 13px Helvetica";
+            ctx.fillText("SCORE", panelX + 20, 130);
+            ctx.fillStyle = color_text_val;
+            ctx.font = "bold 26px Helvetica";
+            ctx.fillText(game.score.toString(), panelX + 20, 160);
+
+            // LINES 표시
+            ctx.fillStyle = color_text_lbl;
+            ctx.font = "bold 13px Helvetica";
+            ctx.fillText("LINES", panelX + 20, 210);
+            ctx.fillStyle = color_text_val;
+            ctx.font = "bold 26px Helvetica";
+            ctx.fillText(game.linesCleared.toString(), panelX + 20, 240);
+
+            // NEXT 표시
+            ctx.fillStyle = color_text_lbl;
+            ctx.font = "bold 13px Helvetica";
+            ctx.fillText("NEXT", panelX + 20, 310);
+
+            const previewBoxX = panelX + 20;
+            const previewBoxY = 330;
+            
+            safeDrawRect(previewBoxX, previewBoxY, 140, 110, 8, color_bg, color_border, 1);
+
+            const np = game.nextPiece;
+            let ox = previewBoxX + 25;
+            let oy = previewBoxY + 30;
+
+            if (np.name === 'I') {
+                oy += 5;
+            } else if (np.name === 'O') {
+                ox += 15;
+                oy += 15;
+            } else {
+                ox += 15;
+                oy += 15;
+            }
+
+            for (const [bx, by] of np.currentBlocks) {
+                safeDrawRect(ox + (bx * 22), oy + (by * 22), 20, 20, 2, np.color);
+            }
+        }
+
+        function drawPaused() {
+            ctx.fillStyle = "rgba(10, 10, 15, 0.75)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#ffb300";
+            ctx.font = "bold 32px Helvetica";
+            ctx.textAlign = "center";
+            ctx.fillText("PAUSED", canvas.width / 2, canvas.height / 2 - 20);
+
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "14px Helvetica";
+            ctx.fillText("Press 'ESC' to Resume", canvas.width / 2, canvas.height / 2 + 20);
+            ctx.textAlign = "left"; 
+        }
+
+        function drawGameOver() {
+            ctx.fillStyle = "rgba(10, 10, 15, 0.85)";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = "#ff1744";
+            ctx.font = "bold 32px Helvetica";
+            ctx.textAlign = "center";
+            ctx.fillText("GAME OVER", canvas.width / 2, canvas.height / 2 - 20);
+
+            ctx.fillStyle = "#ffffff";
+            ctx.font = "14px Helvetica";
+            ctx.fillText("Press 'R' or Tap buttons to Restart", canvas.width / 2, canvas.height / 2 + 20);
+            ctx.textAlign = "left"; 
+        }
+
+        // --- 5. 실시간 동기화 루프 ---
+        let lastTime = performance.now();
+
+        function updateAndRender(now) {
+            const dt = now - lastTime;
+            lastTime = now;
+
+            if (!game.gameOver && !game.paused) {
+                if (keys.ArrowLeft || keys.ArrowRight) {
+                    keyDelayTimer += dt;
+                    
+                    const triggerLimit = isFirstMove ? DAS_DELAY : ARR_INTERVAL;
+                    if (keyDelayTimer >= triggerLimit) {
+                        if (keys.ArrowLeft) {
+                            if (game.checkValidPosition(game.currentPiece, -1, 0)) {
+                                game.currentPiece.x--;
+                            }
+                        } else if (keys.ArrowRight) {
+                            if (game.checkValidPosition(game.currentPiece, 1, 0)) {
+                                game.currentPiece.x++;
+                            }
+                        }
+                        keyDelayTimer = 0;
+                        isFirstMove = false; 
+                    }
+                }
+
+                const currentFallSpeed = keys.ArrowDown ? 50 : game.fallSpeedMs;
+
+                if (now - game.lastFallTime >= currentFallSpeed) {
+                    game.updateGravity();
+                }
+            }
+
+            // 렌더링 파이프라인 호출
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawGridBackground();
+            drawLockedBlocks();
+
+            // 천장 3칸 진입 시 붉은색 경보 배경 먼저 드로잉
+            drawWarningDangerOverlay(now);
+
+            if (!game.gameOver) {
+                drawGhostPiece();   
+                drawCurrentPiece(); 
+            }
+
+            drawSidePanel();
+
+            if (document.activeElement !== canvas && !game.gameOver) {
+                ctx.fillStyle = "rgba(10, 10, 15, 0.7)";
+                ctx.fillRect(0, 0, GRID_COLS * GRID_CELL_SIZE, canvas.height);
+
+                ctx.fillStyle = color_text_val;
+                ctx.font = "bold 15px Helvetica";
+                ctx.textAlign = "center";
+                ctx.fillText("CLICK HERE TO PLAY", (GRID_COLS * GRID_CELL_SIZE) / 2, canvas.height / 2 - 10);
+                
+                ctx.fillStyle = color_text_lbl;
+                ctx.font = "12px Helvetica";
+                ctx.fillText("For Keyboard Control", (GRID_COLS * GRID_CELL_SIZE) / 2, canvas.height / 2 + 15);
+                ctx.textAlign = "left"; 
+            } else if (game.paused) {
+                drawPaused(); 
+            }
+
+            if (game.gameOver) {
+                drawGameOver();
+            }
+
+            requestAnimationFrame(updateAndRender);
+        }
+
+        window.addEventListener('load', () => {
+            canvas.focus();
+        });
+
+        requestAnimationFrame(updateAndRender);
+    </script>
+</body>
+</html>
